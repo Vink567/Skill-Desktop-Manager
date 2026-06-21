@@ -1,0 +1,243 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { pathExists } from "./frontmatter";
+import { readCopyMetadata, writeCopyMetadata } from "./metadata";
+import type {
+  AppConfig,
+  BatchOperationResult,
+  OperationFailure,
+  SkillToolState,
+  ToolConfig,
+  ToolId
+} from "./types";
+
+export async function checkToolState(
+  skillPath: string,
+  skillId: string,
+  tool: ToolConfig
+): Promise<SkillToolState> {
+  const targetPath = path.join(tool.skillsPath, skillId);
+
+  if (!(await pathExists(targetPath))) {
+    return {
+      enabled: false,
+      status: "disabled",
+      targetPath,
+      managed: false
+    };
+  }
+
+  const stat = await fs.lstat(targetPath);
+  if (stat.isSymbolicLink()) {
+    const matches = await linkTargetsSamePath(targetPath, skillPath);
+    if (matches) {
+      return {
+        enabled: true,
+        status: (await pathExists(skillPath)) ? "enabled" : "broken",
+        targetPath,
+        managed: true
+      };
+    }
+
+    return {
+      enabled: false,
+      status: "conflict",
+      targetPath,
+      managed: false,
+      message: "目标位置是指向其他目录的链接"
+    };
+  }
+
+  if (stat.isDirectory()) {
+    const copyMeta = await readCopyMetadata(targetPath);
+    if (copyMeta?.skillId === skillId && (await pathsSame(copyMeta.sourcePath, skillPath))) {
+      return {
+        enabled: true,
+        status: (await pathExists(skillPath)) ? "enabled" : "broken",
+        targetPath,
+        managed: true
+      };
+    }
+
+    return {
+      enabled: false,
+      status: "conflict",
+      targetPath,
+      managed: false,
+      message: "目标位置已有非托管 skill 文件夹"
+    };
+  }
+
+  return {
+    enabled: false,
+    status: "conflict",
+    targetPath,
+    managed: false,
+    message: "目标位置已有非托管文件"
+  };
+}
+
+export async function enableSkillForTool(
+  config: AppConfig,
+  skillPath: string,
+  skillId: string,
+  toolId: ToolId
+): Promise<void> {
+  const tool = config.tools[toolId];
+  if (!tool?.enabled) {
+    throw new Error(`工具未启用: ${toolId}`);
+  }
+  if (!(await pathExists(skillPath))) {
+    throw new Error(`Skill 不存在: ${skillPath}`);
+  }
+
+  await fs.mkdir(tool.skillsPath, { recursive: true });
+  const current = await checkToolState(skillPath, skillId, tool);
+
+  if (current.enabled && current.managed && current.status === "enabled") {
+    return;
+  }
+  if (current.status === "conflict") {
+    throw new Error(current.message || "目标位置存在冲突，未覆盖");
+  }
+  if (current.managed) {
+    await removeManagedTarget(current.targetPath);
+  }
+
+  if (config.linkMode === "copy") {
+    await copyManagedSkill(skillPath, current.targetPath, skillId);
+    return;
+  }
+
+  try {
+    await createManagedLink(skillPath, current.targetPath);
+  } catch (error) {
+    console.warn("[skill-manager] Link creation failed, falling back to copy:", error);
+    await copyManagedSkill(skillPath, current.targetPath, skillId);
+  }
+}
+
+export async function disableSkillForTool(
+  config: AppConfig,
+  skillPath: string,
+  skillId: string,
+  toolId: ToolId
+): Promise<void> {
+  const tool = config.tools[toolId];
+  if (!tool) {
+    throw new Error(`工具不存在: ${toolId}`);
+  }
+
+  const current = await checkToolState(skillPath, skillId, tool);
+  if (current.status === "disabled") {
+    return;
+  }
+  if (!current.managed) {
+    throw new Error(current.message || "目标位置不是本应用管理的链接或副本，未删除");
+  }
+
+  await removeManagedTarget(current.targetPath);
+}
+
+export async function batchSetToolEnabled(
+  config: AppConfig,
+  skills: Array<{ id: string; path: string }>,
+  toolIds: ToolId[],
+  enabled: boolean
+): Promise<BatchOperationResult> {
+  const failures: OperationFailure[] = [];
+  let appliedCount = 0;
+  let skippedCount = 0;
+
+  for (const skill of skills) {
+    for (const toolId of toolIds) {
+      try {
+        const before = await checkToolState(skill.path, skill.id, config.tools[toolId]);
+        if (before.enabled === enabled && before.managed) {
+          skippedCount += 1;
+          continue;
+        }
+        if (enabled) {
+          await enableSkillForTool(config, skill.path, skill.id, toolId);
+        } else {
+          await disableSkillForTool(config, skill.path, skill.id, toolId);
+        }
+        appliedCount += 1;
+      } catch (error) {
+        failures.push({
+          skillId: skill.id,
+          toolId,
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+  }
+
+  return {
+    requestedCount: skills.length * toolIds.length,
+    appliedCount,
+    skippedCount,
+    failedCount: failures.length,
+    failures
+  };
+}
+
+async function createManagedLink(sourcePath: string, targetPath: string): Promise<void> {
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  if (process.platform === "win32") {
+    await fs.symlink(sourcePath, targetPath, "junction");
+    return;
+  }
+  await fs.symlink(sourcePath, targetPath, "dir");
+}
+
+async function copyManagedSkill(sourcePath: string, targetPath: string, skillId: string): Promise<void> {
+  await fs.rm(targetPath, { recursive: true, force: true });
+  await fs.cp(sourcePath, targetPath, {
+    recursive: true,
+    force: false,
+    errorOnExist: true,
+    verbatimSymlinks: false
+  });
+  await writeCopyMetadata(targetPath, skillId, sourcePath);
+}
+
+async function removeManagedTarget(targetPath: string): Promise<void> {
+  try {
+    const stat = await fs.lstat(targetPath);
+    if (stat.isSymbolicLink()) {
+      await fs.unlink(targetPath);
+      return;
+    }
+  } catch {
+    return;
+  }
+
+  await fs.rm(targetPath, { recursive: true, force: true });
+}
+
+async function linkTargetsSamePath(targetPath: string, sourcePath: string): Promise<boolean> {
+  try {
+    const linkedPath = await fs.readlink(targetPath);
+    const absoluteLinkedPath = path.isAbsolute(linkedPath)
+      ? linkedPath
+      : path.resolve(path.dirname(targetPath), linkedPath);
+    return pathsSame(absoluteLinkedPath, sourcePath);
+  } catch {
+    return pathsSame(targetPath, sourcePath);
+  }
+}
+
+async function pathsSame(left: string, right: string): Promise<boolean> {
+  try {
+    const [leftReal, rightReal] = await Promise.all([fs.realpath(left), fs.realpath(right)]);
+    return normalizeForCompare(leftReal) === normalizeForCompare(rightReal);
+  } catch {
+    return normalizeForCompare(path.resolve(left)) === normalizeForCompare(path.resolve(right));
+  }
+}
+
+function normalizeForCompare(value: string): string {
+  const normalized = path.normalize(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
