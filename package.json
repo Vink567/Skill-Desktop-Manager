@@ -15,6 +15,7 @@
     "dist:mac": "npm run build && electron-builder --mac dmg zip --x64 --arm64",
     "preview": "electron-vite preview",
     "smoke": "npm run build && node scripts/smoke-electron.mjs",
+    "smoke:packaged": "node scripts/smoke-packaged.mjs",
     "screenshot": "npm run build && node scripts/capture-screenshot.mjs",
     "test": "vitest run"
   },
