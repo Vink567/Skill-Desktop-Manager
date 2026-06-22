@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Desktop manager for Codex and Claude Code skills.",
   "private": true,
+  "author": "Vink567",
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
@@ -18,6 +19,7 @@
   "build": {
     "appId": "com.skilldesktop.manager",
     "productName": "Skill Desktop Manager",
+    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"
     },
