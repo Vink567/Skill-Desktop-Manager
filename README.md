@@ -61,7 +61,7 @@ npm run dist:mac   # 在 macOS 上生成 dmg/zip
 
 ## 发布说明
 
-Windows 安装包可以在 Windows 本机生成；macOS 安装包必须在 macOS 上生成。本仓库提供 GitHub Actions 工作流，会在 Windows 和 macOS runner 上分别运行测试、源码冒烟测试、构建安装包，并启动打包后的应用本体验证核心功能，再把产物上传到指定 Release。
+Windows 安装包可以在 Windows 本机生成；macOS 安装包必须在 macOS 上生成。本仓库提供 GitHub Actions 工作流，会在 Windows 和 macOS runner 上分别运行测试、构建安装包，并启动打包后的应用本体验证核心功能，再把产物上传到指定 Release。
 
 ## 项目结构
 

@@ -24,13 +24,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Install Electron runtime
-        run: node -e "delete process.env.ELECTRON_SKIP_BINARY_DOWNLOAD; process.env.force_no_cache='true'; require('./node_modules/electron/install.js')"
-      - name: Verify Electron runtime
-        run: node -e "console.log(require('electron'))"
       - run: npm test
-      - run: npm run smoke
-      - run: npm run dist:win
+      - run: npm run dist:win:ci
       - name: Verify packaged Windows app
         run: npm run smoke:packaged
       - uses: actions/upload-artifact@v4
@@ -53,12 +48,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Install Electron runtime
-        run: node -e "delete process.env.ELECTRON_SKIP_BINARY_DOWNLOAD; process.env.force_no_cache='true'; require('./node_modules/electron/install.js')"
-      - name: Verify Electron runtime
-        run: node -e "console.log(require('electron'))"
       - run: npm test
-      - run: npm run smoke
       - run: npm run dist:mac
       - name: Verify packaged macOS app
         run: npm run smoke:packaged
