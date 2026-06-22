@@ -8,7 +8,7 @@
 
 前往 [Releases](https://github.com/Vink567/Skill-Desktop-Manager/releases/latest) 下载最新版安装包：
 
-- 下载 `Skill Desktop Manager Setup 0.1.0.exe`
+- 下载 `Skill.Desktop.Manager.Setup.0.1.0.exe`
 - 双击安装
 - 安装完成后从桌面快捷方式或开始菜单启动
 
