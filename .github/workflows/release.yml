@@ -24,6 +24,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Install Electron runtime
+        run: npm rebuild electron --foreground-scripts --ignore-scripts=false
+      - name: Verify Electron runtime
+        run: node -e "console.log(require('electron'))"
       - run: npm test
       - run: npm run smoke
       - run: npm run dist:win
@@ -47,6 +51,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Install Electron runtime
+        run: npm rebuild electron --foreground-scripts --ignore-scripts=false
+      - name: Verify Electron runtime
+        run: node -e "console.log(require('electron'))"
       - run: npm test
       - run: npm run smoke
       - run: npm run dist:mac
