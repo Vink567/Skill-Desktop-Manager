@@ -1,18 +1,27 @@
 # Skill Desktop Manager
 
-一个用于集中管理 Codex 与 Claude Code skills 的 Windows 桌面应用。普通用户可以直接下载安装包使用，开发者也可以从源码运行。
+一个用于集中管理 Codex 与 Claude Code skills 的桌面应用。普通用户可以直接下载安装包使用，开发者也可以从源码运行。
 
 ![Skill Desktop Manager screenshot](docs/app-screenshot.png)
 
 ## 下载
 
-前往 [Releases](https://github.com/Vink567/Skill-Desktop-Manager/releases/latest) 下载最新版安装包：
+前往 [Releases](https://github.com/Vink567/Skill-Desktop-Manager/releases/latest) 下载最新版。
+
+Windows 用户：
 
 - 下载 `Skill.Desktop.Manager.Setup.0.1.0.exe`
-- 双击安装
+- 双击运行安装包
 - 安装完成后从桌面快捷方式或开始菜单启动
 
-如果 Windows 提示“无法识别的应用”，这是因为安装包暂未做代码签名。确认来源为本仓库 Release 后，可以选择“更多信息”并继续运行。
+macOS 用户：
+
+- Apple Silicon 芯片（M1/M2/M3/M4）下载文件名包含 `arm64` 的 `.dmg`
+- Intel 芯片下载文件名包含 `x64` 的 `.dmg`
+- 打开 `.dmg` 后，把 `Skill Desktop Manager` 拖到 `Applications`
+- 首次启动如果提示来自未知开发者，可以在 Finder 中按住 Control 点击应用，选择“打开”
+
+当前安装包暂未做 Windows 代码签名或 Apple notarization。确认来源为本仓库 Release 后再继续安装或打开。
 
 ## 使用步骤
 
@@ -47,7 +56,12 @@ npm run build      # 类型检查并构建 Electron 应用
 npm run smoke      # 构建后运行 Electron 冒烟测试
 npm run screenshot # 重新生成 README 截图
 npm run dist       # 生成 Windows 安装包
+npm run dist:mac   # 在 macOS 上生成 dmg/zip
 ```
+
+## 发布说明
+
+Windows 安装包可以在 Windows 本机生成；macOS 安装包必须在 macOS 上生成。本仓库提供 GitHub Actions 工作流，会在 Windows 和 macOS runner 上分别运行测试、冒烟测试、构建安装包，并把产物上传到指定 Release。
 
 ## 项目结构
 

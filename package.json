@@ -10,7 +10,9 @@
     "dev": "electron-vite dev",
     "build": "tsc --noEmit && electron-vite build",
     "package": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder --win nsis",
+    "dist": "npm run dist:win",
+    "dist:win": "npm run build && electron-builder --win nsis --config.electronDist=node_modules/electron/dist",
+    "dist:mac": "npm run build && electron-builder --mac dmg zip --x64 --arm64",
     "preview": "electron-vite preview",
     "smoke": "npm run build && node scripts/smoke-electron.mjs",
     "screenshot": "npm run build && node scripts/capture-screenshot.mjs",
@@ -19,7 +21,6 @@
   "build": {
     "appId": "com.skilldesktop.manager",
     "productName": "Skill Desktop Manager",
-    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"
     },
@@ -34,6 +35,26 @@
           "target": "nsis",
           "arch": [
             "x64"
+          ]
+        }
+      ]
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "identity": null,
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
           ]
         }
       ]
