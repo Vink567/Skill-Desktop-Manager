@@ -5,11 +5,15 @@ import type {
   InstallFromGitHubRequest,
   InstallFromLocalPathRequest,
   InstallResult,
+  MergeFileEntry,
+  MergePreview,
+  MergeResolutionChoice,
   SkillCandidate,
   SkillRecord,
   ToolConfig,
   ToolId
 } from "../../electron/main/types";
+import { diffLineClassName, displayLineNumber, formatDiffLineText, parseDiffLines } from "./diffView";
 import { messageFromError } from "./errorMessage";
 
 type SourceFilter = "all" | SkillRecord["sourceType"];
@@ -41,6 +45,8 @@ function App(): ReactElement {
   const [activeSkillId, setActiveSkillId] = useState<string | undefined>();
   const [currentView, setCurrentView] = useState<CurrentView>("list");
   const [activeMarkdown, setActiveMarkdown] = useState("");
+  const [mergePreview, setMergePreview] = useState<MergePreview | undefined>();
+  const [mergeResolutions, setMergeResolutions] = useState<Record<string, MergeResolutionChoice>>({});
   const [query, setQuery] = useState("");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [githubUrl, setGithubUrl] = useState("");
@@ -99,8 +105,12 @@ function App(): ReactElement {
   useEffect(() => {
     if (!activeSkillId) {
       setActiveMarkdown("");
+      setMergePreview(undefined);
+      setMergeResolutions({});
       return;
     }
+    setMergePreview(undefined);
+    setMergeResolutions({});
     let alive = true;
     window.skillManager.skills
       .readMarkdown(activeSkillId)
@@ -305,6 +315,52 @@ function App(): ReactElement {
     await deleteSkills(Array.from(selectedSkillIds));
   }
 
+  async function loadMergePreview(skill: SkillRecord, toolId: ToolId): Promise<void> {
+    await runTask(async () => {
+      const preview = await window.skillManager.skills.getMergePreview({
+        skillId: skill.id,
+        toolId
+      });
+      setMergePreview(preview);
+      setMergeResolutions(
+        Object.fromEntries(
+          preview.files.map((file) => [file.path, preferredMergeResolution(file)])
+        )
+      );
+      setNotice(`找到 ${preview.dirtyFileCount} 个可回流文件`);
+    }, undefined, "正在生成合并预览...");
+  }
+
+  async function applyMergePreview(): Promise<void> {
+    if (!mergePreview) {
+      return;
+    }
+
+    await runTask(async () => {
+      const result = await window.skillManager.skills.applyMerge({
+        skillId: mergePreview.skillId,
+        toolId: mergePreview.toolId,
+        resolutions: Object.entries(mergeResolutions).map(([filePath, resolution]) => ({
+          path: filePath,
+          resolution
+        }))
+      });
+      setSkills(result.skills);
+      setMergePreview(undefined);
+      setMergeResolutions({});
+      setNotice(
+        `已回流 ${result.appliedCount} 个文件，保留 ${result.skippedCount} 个中心版本，刷新 ${result.refreshedCopyCount} 个副本`
+      );
+    }, undefined, "正在合并回中心仓库...");
+  }
+
+  function updateMergeResolution(filePath: string, resolution: MergeResolutionChoice): void {
+    setMergeResolutions((current) => ({
+      ...current,
+      [filePath]: resolution
+    }));
+  }
+
   async function chooseLocalDirectory(): Promise<void> {
     const selected = await window.skillManager.dialog.selectDirectory();
     if (selected) {
@@ -433,6 +489,77 @@ function App(): ReactElement {
     );
   }
 
+  function renderMergePanel(skill: SkillRecord): ReactElement {
+    const mergeableStates = TOOL_IDS
+      .map((toolId) => ({ toolId, state: skill.enabledByTool[toolId] }))
+      .filter(({ state }) => state.canMergeBack);
+
+    return (
+      <section className="merge-panel">
+        <div className="section-heading">
+          <div>
+            <h2>合并回中心仓库</h2>
+            <p className="settings-note">
+              只会处理本应用管理的复制副本；链接模式已经直接指向中心仓库。
+            </p>
+          </div>
+          {mergePreview && (
+            <button className="primary" onClick={applyMergePreview} disabled={busy || mergePreview.files.length === 0}>
+              确认合并
+            </button>
+          )}
+        </div>
+
+        <div className="merge-actions">
+          {mergeableStates.length ? (
+            mergeableStates.map(({ toolId, state }) => (
+              <button
+                key={toolId}
+                onClick={() => void loadMergePreview(skill, toolId)}
+                disabled={busy}
+              >
+                预览 {toolName(toolId)} {state.managed ? "副本" : "目录"}（{state.dirtyFileCount}）
+              </button>
+            ))
+          ) : (
+            <span className="muted">当前没有可回流的工具目录。</span>
+          )}
+        </div>
+
+        {mergePreview && renderMergePreview(mergePreview)}
+      </section>
+    );
+  }
+
+  function renderMergePreview(preview: MergePreview): ReactElement {
+    const diffFiles = preview.files.filter((file) => file.diff);
+
+    return (
+      <div className="merge-preview">
+        <div className="merge-summary">
+          <span>{toolName(preview.toolId)}</span>
+          <span>{preview.dirtyFileCount} 个文件</span>
+          <span>{diffFiles.length} 个有文本差异</span>
+          <span>{preview.conflictCount} 个冲突</span>
+          <span>{preview.binaryCount} 个二进制</span>
+        </div>
+        {diffFiles.length ? (
+          diffFiles.map((file) => (
+            <MergeFileCard
+              key={file.path}
+              file={file}
+              toolId={preview.toolId}
+              resolution={mergeResolutions[file.path] ?? preferredMergeResolution(file)}
+              onResolutionChange={updateMergeResolution}
+            />
+          ))
+        ) : (
+          <p className="settings-note">当前没有可展示的文本差异。</p>
+        )}
+      </div>
+    );
+  }
+
   if (currentView === "settings") {
     return (
       <main className="app-shell detail-shell">
@@ -465,12 +592,16 @@ function App(): ReactElement {
           <div className="detail-meta">
             <strong>{activeSkill.name}</strong>
             <code>{activeSkill.path}</code>
+            <span className={`sync-badge sync-${activeSkill.syncState}`}>
+              {syncStateLabel(activeSkill.syncState, activeSkill.dirtyFileCount)}
+            </span>
             {activeSkill.sourceUrl && (
               <a href={activeSkill.sourceUrl} target="_blank" rel="noreferrer">
                 {activeSkill.sourceUrl}
               </a>
             )}
           </div>
+          {renderMergePanel(activeSkill)}
           <pre className="markdown-preview">{activeMarkdown}</pre>
           {renderSettings()}
         </section>
@@ -483,7 +614,7 @@ function App(): ReactElement {
       <header className="topbar">
         <div>
           <p className="eyebrow">Codex + Claude Code</p>
-          <h1>Skill 桌面管理器</h1>
+          <h1>Skill 桌面管理器 V0.2</h1>
         </div>
         <div className="topbar-actions">
           <button onClick={refreshAll} disabled={busy}>刷新</button>
@@ -636,6 +767,7 @@ function App(): ReactElement {
                       </th>
                       <th>Skill</th>
                       <th>来源</th>
+                      <th>同步</th>
                       <th>Codex</th>
                       <th>Claude Code</th>
                       <th>操作</th>
@@ -664,6 +796,11 @@ function App(): ReactElement {
                             {sourceLabel(skill.sourceType)}
                           </span>
                         </td>
+                        <td>
+                          <span className={`sync-badge sync-${skill.syncState}`}>
+                            {syncStateLabel(skill.syncState, skill.dirtyFileCount)}
+                          </span>
+                        </td>
                         {TOOL_IDS.map((toolId) => (
                           <td key={toolId}>
                             <ToolToggle
@@ -683,7 +820,7 @@ function App(): ReactElement {
                     ))}
                     {!filteredSkills.length && (
                       <tr>
-                        <td colSpan={6} className="empty-cell">
+                        <td colSpan={7} className="empty-cell">
                           没有找到 skill。可以从 GitHub、本地目录导入，或先接管现有工具目录。
                         </td>
                       </tr>
@@ -724,9 +861,103 @@ function ToolToggle({
       <small className={`state-label state-${state.status}`}>
         {stateLabel(state.status)}
       </small>
+      {state.enabled && state.managed && (
+        <small className={`sync-inline sync-${state.syncState}`}>
+          {syncStateLabel(state.syncState, state.dirtyFileCount)}
+        </small>
+      )}
       {state.message && <small className="state-message">{state.message}</small>}
     </div>
   );
+}
+
+function MergeFileCard({
+  file,
+  toolId,
+  resolution,
+  onResolutionChange
+}: {
+  file: MergeFileEntry;
+  toolId: ToolId;
+  resolution: MergeResolutionChoice;
+  onResolutionChange: (filePath: string, resolution: MergeResolutionChoice) => void;
+}): ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const diffRows = parseDiffLines(file.diff ?? "");
+
+  return (
+    <article className={`merge-file merge-${file.status}`}>
+      <div className="merge-file-header">
+        <button
+          type="button"
+          className="merge-file-main"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <strong>{file.path}</strong>
+          <span>{mergeStatusLabel(file)}</span>
+        </button>
+        <div className="merge-file-actions">
+          <select
+            value={resolution}
+            onChange={(event) => onResolutionChange(file.path, event.target.value as MergeResolutionChoice)}
+          >
+            {file.resolutionOptions.map((option) => (
+              <option value={option} key={option}>
+                {resolutionLabel(option, toolId)}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {expanded && (
+        <div className="merge-diff" role="table" aria-label={`${file.path} 差异`}>
+          {diffRows.map((row) => (
+            <div className={`diff-row ${diffLineClassName(row)}`} key={row.key} role="row">
+              <span className="diff-line-number">{displayLineNumber(row)}</span>
+              <code className="diff-line-code">{formatDiffLineText(row)}</code>
+            </div>
+          ))}
+        </div>
+      )}
+    </article>
+  );
+}
+
+function preferredMergeResolution(file: MergeFileEntry): MergeResolutionChoice {
+  return file.resolutionOptions.includes("copy") ? "copy" : file.defaultResolution;
+}
+
+function mergeStatusLabel(file: MergeFileEntry): string {
+  if (file.requiresResolution) {
+    return file.status === "conflict" ? "需要处理冲突" : "需要确认";
+  }
+  switch (file.status) {
+    case "added":
+      return "新增";
+    case "deleted":
+      return "删除";
+    case "auto-merged":
+      return "可自动合并";
+    case "modified":
+      return "修改";
+    case "binary":
+      return "二进制";
+    default:
+      return "冲突";
+  }
+}
+
+function resolutionLabel(resolution: MergeResolutionChoice, toolId: ToolId): string {
+  switch (resolution) {
+    case "copy":
+    case "auto":
+      return `采用 ${toolName(toolId)}`;
+    case "hub":
+      return "保留中心";
+    default:
+      return `采用 ${toolName(toolId)}`;
+  }
 }
 
 function sourceLabel(source: SkillRecord["sourceType"]): string {
@@ -739,6 +970,25 @@ function sourceLabel(source: SkillRecord["sourceType"]): string {
       return "接管";
     default:
       return "中心";
+  }
+}
+
+function toolName(toolId: ToolId): string {
+  return toolId === "codex" ? "Codex" : "Claude Code";
+}
+
+function syncStateLabel(state: SkillRecord["syncState"], dirtyFileCount: number): string {
+  switch (state) {
+    case "dirty":
+      return `待回流 ${dirtyFileCount}`;
+    case "linked":
+      return "软链接同步";
+    case "unknown":
+      return "未知";
+    case "unmanaged":
+      return dirtyFileCount ? `可回流 ${dirtyFileCount}` : "非托管";
+    default:
+      return "已同步";
   }
 }
 

@@ -10,7 +10,7 @@
 
 Windows 用户：
 
-- 下载 `Skill.Desktop.Manager.Setup.0.1.0.exe`
+- 下载 `Skill Desktop Manager Setup 0.2.0.exe`
 - 双击运行安装包
 - 安装完成后从桌面快捷方式或开始菜单启动
 

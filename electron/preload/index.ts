@@ -7,6 +7,10 @@ import type {
   DeleteSkillsRequest,
   InstallFromGitHubRequest,
   InstallFromLocalPathRequest,
+  MergeApplyRequest,
+  MergeApplyResult,
+  MergePreview,
+  MergePreviewRequest,
   SetToolEnabledRequest,
   SkillRecord
 } from "../main/types";
@@ -32,7 +36,11 @@ const api = {
     delete: (request: DeleteSkillsRequest): Promise<DeleteSkillsResult & { skills: SkillRecord[] }> =>
       ipcRenderer.invoke("skills:delete", request),
     adoptExisting: (request?: AdoptExistingRequest) => ipcRenderer.invoke("skills:adoptExisting", request ?? {}),
-    readMarkdown: (skillId: string) => ipcRenderer.invoke("skills:readMarkdown", skillId)
+    readMarkdown: (skillId: string) => ipcRenderer.invoke("skills:readMarkdown", skillId),
+    getMergePreview: (request: MergePreviewRequest): Promise<MergePreview> =>
+      ipcRenderer.invoke("skills:getMergePreview", request),
+    applyMerge: (request: MergeApplyRequest): Promise<MergeApplyResult & { skills: SkillRecord[] }> =>
+      ipcRenderer.invoke("skills:applyMerge", request)
   },
   dialog: {
     selectDirectory: (): Promise<string | undefined> => ipcRenderer.invoke("dialog:selectDirectory")

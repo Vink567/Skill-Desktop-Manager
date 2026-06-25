@@ -4,6 +4,7 @@ import { deleteInstalledSkills } from "./deleter";
 import { adoptExistingSkills, installFromGitHub, installFromLocalPath } from "./installer";
 import { batchSetToolEnabled, disableSkillForTool, enableSkillForTool } from "./linker";
 import { readSkillMarkdown } from "./frontmatter";
+import { applyMerge, getMergePreview } from "./merger";
 import { listSkills } from "./scanner";
 import type {
   AdoptExistingRequest,
@@ -12,6 +13,8 @@ import type {
   DeleteSkillsRequest,
   InstallFromGitHubRequest,
   InstallFromLocalPathRequest,
+  MergeApplyRequest,
+  MergePreviewRequest,
   SetToolEnabledRequest
 } from "./types";
 
@@ -93,6 +96,21 @@ export function registerIpcHandlers(): void {
       throw new Error(`Skill 不存在: ${skillId}`);
     }
     return readSkillMarkdown(skill.path);
+  });
+
+  ipcMain.handle("skills:getMergePreview", async (_event, request: MergePreviewRequest) => {
+    const config = await loadConfig();
+    const skills = await listSkills(config);
+    return getMergePreview(config, skills, request);
+  });
+
+  ipcMain.handle("skills:applyMerge", async (_event, request: MergeApplyRequest) => {
+    const config = await loadConfig();
+    const skills = await listSkills(config);
+    return {
+      ...(await applyMerge(config, skills, request)),
+      skills: await listSkills(config)
+    };
   });
 
   ipcMain.handle("dialog:selectDirectory", async () => {

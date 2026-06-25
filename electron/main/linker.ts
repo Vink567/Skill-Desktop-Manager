@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathExists } from "./frontmatter";
 import { readCopyMetadata, writeCopyMetadata } from "./metadata";
+import { createDirectorySnapshot, snapshotToMap } from "./snapshot";
 import type {
   AppConfig,
   BatchOperationResult,
+  ManagedCopySnapshot,
   OperationFailure,
   SkillToolState,
   ToolConfig,
@@ -23,7 +25,10 @@ export async function checkToolState(
       enabled: false,
       status: "disabled",
       targetPath,
-      managed: false
+      managed: false,
+      syncState: "clean",
+      dirtyFileCount: 0,
+      canMergeBack: false
     };
   }
 
@@ -35,7 +40,10 @@ export async function checkToolState(
         enabled: true,
         status: (await pathExists(skillPath)) ? "enabled" : "broken",
         targetPath,
-        managed: true
+        managed: true,
+        syncState: "linked",
+        dirtyFileCount: 0,
+        canMergeBack: false
       };
     }
 
@@ -44,27 +52,38 @@ export async function checkToolState(
       status: "conflict",
       targetPath,
       managed: false,
-      message: "目标位置是指向其他目录的链接"
+      message: "目标位置是指向其他目录的链接",
+      syncState: "unknown",
+      dirtyFileCount: 0,
+      canMergeBack: false
     };
   }
 
   if (stat.isDirectory()) {
     const copyMeta = await readCopyMetadata(targetPath);
     if (copyMeta?.skillId === skillId && (await pathsSame(copyMeta.sourcePath, skillPath))) {
+      const dirtyFileCount = await countDirtyFiles(targetPath, copyMeta.baseline);
       return {
         enabled: true,
         status: (await pathExists(skillPath)) ? "enabled" : "broken",
         targetPath,
-        managed: true
+        managed: true,
+        syncState: copyMeta.baseline ? (dirtyFileCount ? "dirty" : "clean") : "unknown",
+        dirtyFileCount,
+        canMergeBack: Boolean(copyMeta.baseline && dirtyFileCount)
       };
     }
+    const unmanagedDirtyFileCount = await countDifferentFiles(skillPath, targetPath);
 
     return {
       enabled: false,
       status: "conflict",
       targetPath,
       managed: false,
-      message: "目标位置已有非托管 skill 文件夹"
+      message: "目标位置已有非托管 skill 文件夹",
+      syncState: "unmanaged",
+      dirtyFileCount: unmanagedDirtyFileCount,
+      canMergeBack: unmanagedDirtyFileCount > 0
     };
   }
 
@@ -73,7 +92,10 @@ export async function checkToolState(
     status: "conflict",
     targetPath,
     managed: false,
-    message: "目标位置已有非托管文件"
+    message: "目标位置已有非托管文件",
+    syncState: "unknown",
+    dirtyFileCount: 0,
+    canMergeBack: false
   };
 }
 
@@ -139,6 +161,25 @@ export async function disableSkillForTool(
   await removeManagedTarget(current.targetPath);
 }
 
+export async function refreshManagedSkillForTool(
+  config: AppConfig,
+  skillPath: string,
+  skillId: string,
+  toolId: ToolId
+): Promise<void> {
+  const tool = config.tools[toolId];
+  if (!tool) {
+    throw new Error(`工具不存在: ${toolId}`);
+  }
+
+  const current = await checkToolState(skillPath, skillId, tool);
+  if (!current.enabled || !current.managed || current.syncState === "linked") {
+    return;
+  }
+
+  await copyManagedSkill(skillPath, current.targetPath, skillId);
+}
+
 export async function batchSetToolEnabled(
   config: AppConfig,
   skills: Array<{ id: string; path: string }>,
@@ -199,7 +240,7 @@ async function copyManagedSkill(sourcePath: string, targetPath: string, skillId:
     errorOnExist: true,
     verbatimSymlinks: false
   });
-  await writeCopyMetadata(targetPath, skillId, sourcePath);
+  await writeCopyMetadata(targetPath, skillId, sourcePath, await createDirectorySnapshot(sourcePath));
 }
 
 async function removeManagedTarget(targetPath: string): Promise<void> {
@@ -240,4 +281,41 @@ async function pathsSame(left: string, right: string): Promise<boolean> {
 function normalizeForCompare(value: string): string {
   const normalized = path.normalize(value);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+async function countDirtyFiles(
+  targetPath: string,
+  baseline?: ManagedCopySnapshot
+): Promise<number> {
+  if (!baseline) {
+    return 0;
+  }
+
+  const current = snapshotToMap(await createDirectorySnapshot(targetPath));
+  const base = snapshotToMap(baseline);
+  const allPaths = new Set([...base.keys(), ...current.keys()]);
+  let dirtyCount = 0;
+
+  for (const relativePath of allPaths) {
+    if (base.get(relativePath)?.hash !== current.get(relativePath)?.hash) {
+      dirtyCount += 1;
+    }
+  }
+
+  return dirtyCount;
+}
+
+async function countDifferentFiles(leftPath: string, rightPath: string): Promise<number> {
+  const left = snapshotToMap(await createDirectorySnapshot(leftPath));
+  const right = snapshotToMap(await createDirectorySnapshot(rightPath));
+  const allPaths = new Set([...left.keys(), ...right.keys()]);
+  let differentCount = 0;
+
+  for (const relativePath of allPaths) {
+    if (left.get(relativePath)?.hash !== right.get(relativePath)?.hash) {
+      differentCount += 1;
+    }
+  }
+
+  return differentCount;
 }

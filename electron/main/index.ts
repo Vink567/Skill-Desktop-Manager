@@ -78,7 +78,7 @@ function createWindow(): BrowserWindow {
     minWidth: 940,
     minHeight: 620,
     show: !(isSmoke || isScreenshot),
-    title: "Skill Desktop Manager",
+    title: `Skill Desktop Manager v${app.getVersion()}`,
     backgroundColor: "#f6f3ee",
     webPreferences: {
       preload: path.join(__dirname, "../preload/index.mjs"),

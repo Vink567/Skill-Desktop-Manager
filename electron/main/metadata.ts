@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ManagedCopyMetadata, ManagerMetadata } from "./types";
+import type { ManagedCopyMetadata, ManagedCopySnapshot, ManagerMetadata } from "./types";
 
 export const HUB_METADATA_FILE = ".skill-desktop-manager.json";
 export const COPY_METADATA_FILE = ".skill-desktop-manager-source.json";
@@ -40,13 +40,15 @@ export async function readCopyMetadata(targetDir: string): Promise<ManagedCopyMe
 export async function writeCopyMetadata(
   targetDir: string,
   skillId: string,
-  sourcePath: string
+  sourcePath: string,
+  baseline?: ManagedCopySnapshot
 ): Promise<void> {
   const metadata: ManagedCopyMetadata = {
     app: "skill-desktop-manager",
     skillId,
     sourcePath,
-    copiedAt: new Date().toISOString()
+    copiedAt: new Date().toISOString(),
+    baseline
   };
   await fs.writeFile(path.join(targetDir, COPY_METADATA_FILE), `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
 }

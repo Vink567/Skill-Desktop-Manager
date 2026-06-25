@@ -10,6 +10,27 @@ export type ToolSkillStatus =
   | "conflict"
   | "broken";
 
+export type SkillSyncState =
+  | "clean"
+  | "dirty"
+  | "linked"
+  | "unmanaged"
+  | "unknown";
+
+export type SnapshotFileKind = "text" | "binary";
+
+export interface ManagedCopySnapshotFile {
+  path: string;
+  kind: SnapshotFileKind;
+  hash: string;
+  content?: string;
+}
+
+export interface ManagedCopySnapshot {
+  createdAt: string;
+  files: ManagedCopySnapshotFile[];
+}
+
 export interface ToolConfig {
   id: ToolId;
   name: string;
@@ -34,6 +55,9 @@ export interface SkillToolState {
   targetPath: string;
   managed: boolean;
   message?: string;
+  syncState: SkillSyncState;
+  dirtyFileCount: number;
+  canMergeBack: boolean;
 }
 
 export interface SkillRecord {
@@ -45,6 +69,8 @@ export interface SkillRecord {
   sourceUrl?: string;
   sourceSubpath?: string;
   revision?: string;
+  syncState: SkillSyncState;
+  dirtyFileCount: number;
   enabledByTool: Record<ToolId, SkillToolState>;
 }
 
@@ -111,6 +137,61 @@ export interface DeleteSkillsResult {
   failures: OperationFailure[];
 }
 
+export type MergeFileStatus =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "auto-merged"
+  | "conflict"
+  | "binary";
+
+export type MergeResolutionChoice = "auto" | "copy" | "hub";
+
+export interface MergeFileEntry {
+  path: string;
+  status: MergeFileStatus;
+  binary: boolean;
+  hubChanged: boolean;
+  copyChanged: boolean;
+  requiresResolution: boolean;
+  defaultResolution: MergeResolutionChoice;
+  resolutionOptions: MergeResolutionChoice[];
+  diff?: string;
+}
+
+export interface MergePreviewRequest {
+  skillId: string;
+  toolId: ToolId;
+}
+
+export interface MergePreview {
+  skillId: string;
+  toolId: ToolId;
+  sourcePath: string;
+  targetPath: string;
+  dirtyFileCount: number;
+  conflictCount: number;
+  binaryCount: number;
+  files: MergeFileEntry[];
+  message?: string;
+}
+
+export interface MergeResolution {
+  path: string;
+  resolution: MergeResolutionChoice;
+}
+
+export interface MergeApplyRequest extends MergePreviewRequest {
+  resolutions?: MergeResolution[];
+}
+
+export interface MergeApplyResult {
+  appliedCount: number;
+  skippedCount: number;
+  refreshedCopyCount: number;
+  failures: OperationFailure[];
+}
+
 export interface SetToolEnabledRequest {
   skillId: string;
   toolId: ToolId;
@@ -140,4 +221,5 @@ export interface ManagedCopyMetadata {
   skillId: string;
   sourcePath: string;
   copiedAt: string;
+  baseline?: ManagedCopySnapshot;
 }

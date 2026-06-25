@@ -4,7 +4,7 @@ import { isSkillDir, parseSkillMeta, pathExists } from "./frontmatter";
 import { checkToolState } from "./linker";
 import { readHubMetadata } from "./metadata";
 import { toPosixRelativePath } from "./paths";
-import type { AppConfig, SkillCandidate, SkillRecord, ToolId } from "./types";
+import type { AppConfig, SkillCandidate, SkillRecord, SkillSyncState, ToolId } from "./types";
 
 const IGNORED_DIR_NAMES = new Set([
   ".git",
@@ -32,6 +32,7 @@ export async function buildSkillRecord(config: AppConfig, skillPath: string): Pr
   for (const toolId of Object.keys(config.tools) as ToolId[]) {
     enabledByTool[toolId] = await checkToolState(skillPath, meta.id, config.tools[toolId]);
   }
+  const aggregate = aggregateSyncState(Object.values(enabledByTool));
 
   return {
     id: meta.id,
@@ -42,6 +43,8 @@ export async function buildSkillRecord(config: AppConfig, skillPath: string): Pr
     sourceUrl: hubMeta.sourceUrl,
     sourceSubpath: hubMeta.sourceSubpath,
     revision: hubMeta.revision,
+    syncState: aggregate.syncState,
+    dirtyFileCount: aggregate.dirtyFileCount,
     enabledByTool
   };
 }
@@ -120,4 +123,20 @@ function pathDepth(relativePath: string): number {
     return 0;
   }
   return relativePath.split(/[\\/]/).filter(Boolean).length;
+}
+
+function aggregateSyncState(
+  states: SkillRecord["enabledByTool"][ToolId][]
+): { syncState: SkillSyncState; dirtyFileCount: number } {
+  const dirtyFileCount = states.reduce((total, state) => total + state.dirtyFileCount, 0);
+  if (dirtyFileCount > 0) {
+    return { syncState: "dirty", dirtyFileCount };
+  }
+  if (states.some((state) => state.syncState === "unknown")) {
+    return { syncState: "unknown", dirtyFileCount: 0 };
+  }
+  if (states.some((state) => state.syncState === "linked")) {
+    return { syncState: "linked", dirtyFileCount: 0 };
+  }
+  return { syncState: "clean", dirtyFileCount: 0 };
 }

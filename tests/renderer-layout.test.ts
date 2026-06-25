@@ -61,4 +61,73 @@ describe("renderer layout", () => {
     expect(app).toContain("手动选择");
     expect(app).toContain("skillsPath: selected");
   });
+
+  it("renders merge-back controls and sync state", () => {
+    const app = readFileSync("src/renderer/App.tsx", "utf8");
+    const css = readFileSync("src/renderer/styles.css", "utf8");
+
+    expect(app).toContain("合并回中心仓库");
+    expect(app).toContain("getMergePreview");
+    expect(app).toContain("applyMerge");
+    expect(app).toContain("syncStateLabel(skill.syncState, skill.dirtyFileCount)");
+    expect(app).toContain("确认合并");
+    expect(app).toContain('state.managed ? "副本" : "目录"');
+    expect(app).toContain("可回流");
+    expect(css).toContain(".merge-panel");
+    expect(css).toContain(".sync-dirty");
+    expect(css).toContain(".sync-unmanaged");
+  });
+
+  it("renders merge diffs as collapsed color-coded diff cards", () => {
+    const app = readFileSync("src/renderer/App.tsx", "utf8");
+    const css = readFileSync("src/renderer/styles.css", "utf8");
+    const numberColumnMatches = app.match(/className="diff-line-number"/g) ?? [];
+
+    expect(app).toContain("const diffFiles = preview.files.filter((file) => file.diff)");
+    expect(app).toContain("diffFiles.map((file)");
+    expect(app).not.toContain("没有文本差异。");
+    expect(app).toContain("const [expanded, setExpanded] = useState(false);");
+    expect(app).toContain('className="merge-file-main"');
+    expect(app).toContain("onClick={() => setExpanded((current) => !current)}");
+    expect(app).not.toContain('className="diff-toggle"');
+    expect(app).not.toContain("查看差异");
+    expect(app).not.toContain("收起差异");
+    expect(app).toContain("const diffRows = parseDiffLines(file.diff ?? \"\");");
+    expect(app).toContain('className={`diff-row ${diffLineClassName(row)}`}');
+    expect(app).toContain("{displayLineNumber(row)}");
+    expect(app).toContain('className="diff-line-number"');
+    expect(numberColumnMatches).toHaveLength(1);
+    expect(app).not.toContain('className="diff-line-marker"');
+    expect(app).not.toContain("{row.marker}");
+    expect(app).toContain('className="diff-line-code"');
+    expect(app).toContain("{formatDiffLineText(row)}");
+    expect(app).not.toContain(".filter(isVisibleDiffLine)");
+    expect(css).toContain("grid-template-columns: 64px minmax(0, 1fr)");
+    expect(css).not.toContain(".diff-line-marker");
+    expect(css).toContain(".diff-row-context");
+    expect(css).toContain("background: #ffffff");
+    expect(css).toContain(".diff-row-added");
+    expect(css).toContain(".diff-row-removed");
+    expect(css).not.toContain(".diff-line-empty");
+    expect(css).toContain(".merge-file-main");
+    expect(css).toContain(".merge-file-main[aria-expanded=\"true\"]");
+  });
+
+  it("defaults merge resolution to the tool copy and labels options by tool name", () => {
+    const app = readFileSync("src/renderer/App.tsx", "utf8");
+
+    expect(app).toContain("preferredMergeResolution(file)");
+    expect(app).toContain('file.resolutionOptions.includes("copy") ? "copy" : file.defaultResolution');
+    expect(app).toContain("resolutionLabel(option, toolId)");
+    expect(app).toContain('return `采用 ${toolName(toolId)}`;');
+    expect(app).not.toContain("采用副本");
+    expect(app).not.toContain('return "自动合并";');
+  });
+
+  it("labels linked sync as soft-link sync", () => {
+    const app = readFileSync("src/renderer/App.tsx", "utf8");
+
+    expect(app).toContain('return "软链接同步";');
+    expect(app).not.toContain('return "链接同步";');
+  });
 });

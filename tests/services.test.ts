@@ -7,6 +7,7 @@ import { deleteInstalledSkills } from "../electron/main/deleter";
 import { parseSkillMeta, pathExists } from "../electron/main/frontmatter";
 import { cloneGitHubRepo, parseGitHubUrl } from "../electron/main/github";
 import { installFromLocalPath } from "../electron/main/installer";
+import { applyMerge, getMergePreview } from "../electron/main/merger";
 import { enableSkillForTool, disableSkillForTool, checkToolState } from "../electron/main/linker";
 import { COPY_METADATA_FILE } from "../electron/main/metadata";
 import { findSkillCandidates, listSkills } from "../electron/main/scanner";
@@ -297,8 +298,239 @@ describe("link management", () => {
     expect(await pathExists(path.join(target, COPY_METADATA_FILE))).toBe(true);
     await expect(checkToolState(skillPath, "copy-skill", config.tools["claude-code"])).resolves.toMatchObject({
       enabled: true,
+      syncState: "clean",
       managed: true
     });
+  });
+});
+
+describe("managed copy merge back", () => {
+  it("detects dirty managed copies and previews copy-only changes", async () => {
+    const root = await makeTempRoot();
+    const hubDir = path.join(root, "hub");
+    const skillPath = path.join(hubDir, "dirty-skill");
+    await writeSkill(skillPath, "dirty-skill");
+    const config = makeConfig(root, hubDir, "copy");
+
+    await enableSkillForTool(config, skillPath, "dirty-skill", "codex");
+    const target = path.join(config.tools.codex.skillsPath, "dirty-skill", "SKILL.md");
+    await fs.appendFile(target, "\ncopy edit\n", "utf8");
+
+    const state = await checkToolState(skillPath, "dirty-skill", config.tools.codex);
+    expect(state).toMatchObject({
+      syncState: "dirty",
+      dirtyFileCount: 1,
+      canMergeBack: true
+    });
+
+    const preview = await getMergePreview(config, await listSkills(config), {
+      skillId: "dirty-skill",
+      toolId: "codex"
+    });
+
+    expect(preview.dirtyFileCount).toBe(1);
+    expect(preview.conflictCount).toBe(0);
+    expect(preview.files[0]).toMatchObject({
+      path: "SKILL.md",
+      status: "auto-merged",
+      defaultResolution: "auto"
+    });
+    expect(preview.files[0].diff).toContain("+ copy edit");
+  });
+
+  it("marks hub and copy edits to the same file as conflicts", async () => {
+    const root = await makeTempRoot();
+    const hubDir = path.join(root, "hub");
+    const skillPath = path.join(hubDir, "conflict-skill");
+    await writeSkill(skillPath, "conflict-skill");
+    const config = makeConfig(root, hubDir, "copy");
+
+    await enableSkillForTool(config, skillPath, "conflict-skill", "codex");
+    await fs.appendFile(path.join(skillPath, "SKILL.md"), "\nhub edit\n", "utf8");
+    await fs.appendFile(
+      path.join(config.tools.codex.skillsPath, "conflict-skill", "SKILL.md"),
+      "\ncopy edit\n",
+      "utf8"
+    );
+
+    const preview = await getMergePreview(config, await listSkills(config), {
+      skillId: "conflict-skill",
+      toolId: "codex"
+    });
+
+    expect(preview.conflictCount).toBe(1);
+    expect(preview.files[0]).toMatchObject({
+      status: "conflict",
+      requiresResolution: true,
+      defaultResolution: "hub"
+    });
+  });
+
+  it("previews unmanaged same-name tool directories as merge sources", async () => {
+    const root = await makeTempRoot();
+    const hubDir = path.join(root, "hub");
+    const skillPath = path.join(hubDir, "unmanaged-skill");
+    await writeSkill(skillPath, "unmanaged-skill");
+    const config = makeConfig(root, hubDir, "copy");
+    const unmanagedPath = path.join(config.tools["claude-code"].skillsPath, "unmanaged-skill");
+    await writeSkill(unmanagedPath, "unmanaged-skill");
+    await fs.appendFile(path.join(unmanagedPath, "SKILL.md"), "\nclaude edit\n", "utf8");
+
+    const state = await checkToolState(skillPath, "unmanaged-skill", config.tools["claude-code"]);
+    expect(state).toMatchObject({
+      status: "conflict",
+      managed: false,
+      syncState: "unmanaged",
+      canMergeBack: true
+    });
+
+    const preview = await getMergePreview(config, await listSkills(config), {
+      skillId: "unmanaged-skill",
+      toolId: "claude-code"
+    });
+
+    expect(preview.files[0]).toMatchObject({
+      path: "SKILL.md",
+      requiresResolution: true,
+      defaultResolution: "hub"
+    });
+    expect(preview.files[0].diff).toContain("+ claude edit");
+  });
+
+  it("applies selected copy changes and refreshes other managed copies", async () => {
+    const root = await makeTempRoot();
+    const hubDir = path.join(root, "hub");
+    const skillPath = path.join(hubDir, "merge-skill");
+    await writeSkill(skillPath, "merge-skill");
+    const config = makeConfig(root, hubDir, "copy");
+
+    await enableSkillForTool(config, skillPath, "merge-skill", "codex");
+    await enableSkillForTool(config, skillPath, "merge-skill", "claude-code");
+    await fs.appendFile(
+      path.join(config.tools.codex.skillsPath, "merge-skill", "SKILL.md"),
+      "\ncopy edit\n",
+      "utf8"
+    );
+
+    const result = await applyMerge(config, await listSkills(config), {
+      skillId: "merge-skill",
+      toolId: "codex",
+      resolutions: [{ path: "SKILL.md", resolution: "copy" }]
+    });
+
+    expect(result).toMatchObject({
+      appliedCount: 1,
+      skippedCount: 0,
+      refreshedCopyCount: 2,
+      failures: []
+    });
+    await expect(fs.readFile(path.join(skillPath, "SKILL.md"), "utf8")).resolves.toContain("copy edit");
+    await expect(
+      fs.readFile(path.join(config.tools["claude-code"].skillsPath, "merge-skill", "SKILL.md"), "utf8")
+    ).resolves.toContain("copy edit");
+    await expect(checkToolState(skillPath, "merge-skill", config.tools.codex)).resolves.toMatchObject({
+      syncState: "clean",
+      dirtyFileCount: 0
+    });
+  });
+
+  it("keeps the hub version and refreshes the selected managed copy when choosing hub", async () => {
+    const root = await makeTempRoot();
+    const hubDir = path.join(root, "hub");
+    const skillPath = path.join(hubDir, "keep-hub-skill");
+    await writeSkill(skillPath, "keep-hub-skill");
+    const config = makeConfig(root, hubDir, "copy");
+
+    await enableSkillForTool(config, skillPath, "keep-hub-skill", "codex");
+    const target = path.join(config.tools.codex.skillsPath, "keep-hub-skill", "SKILL.md");
+    await fs.appendFile(target, "\ncodex local edit\n", "utf8");
+
+    const result = await applyMerge(config, await listSkills(config), {
+      skillId: "keep-hub-skill",
+      toolId: "codex",
+      resolutions: [{ path: "SKILL.md", resolution: "hub" }]
+    });
+
+    expect(result).toMatchObject({
+      appliedCount: 0,
+      skippedCount: 1,
+      refreshedCopyCount: 1,
+      failures: []
+    });
+    await expect(fs.readFile(path.join(skillPath, "SKILL.md"), "utf8")).resolves.not.toContain(
+      "codex local edit"
+    );
+    await expect(fs.readFile(target, "utf8")).resolves.not.toContain("codex local edit");
+    await expect(fs.readFile(target, "utf8")).resolves.toBe(
+      await fs.readFile(path.join(skillPath, "SKILL.md"), "utf8")
+    );
+    await expect(checkToolState(skillPath, "keep-hub-skill", config.tools.codex)).resolves.toMatchObject({
+      syncState: "clean",
+      dirtyFileCount: 0
+    });
+  });
+
+  it("keeps the hub version and restores an unmanaged tool directory when choosing hub", async () => {
+    const root = await makeTempRoot();
+    const hubDir = path.join(root, "hub");
+    const skillPath = path.join(hubDir, "keep-unmanaged-hub-skill");
+    await writeSkill(skillPath, "keep-unmanaged-hub-skill");
+    const config = makeConfig(root, hubDir, "copy");
+    const unmanagedPath = path.join(config.tools.codex.skillsPath, "keep-unmanaged-hub-skill");
+    await writeSkill(unmanagedPath, "keep-unmanaged-hub-skill");
+    await fs.appendFile(path.join(unmanagedPath, "SKILL.md"), "\nunmanaged codex edit\n", "utf8");
+
+    const result = await applyMerge(config, await listSkills(config), {
+      skillId: "keep-unmanaged-hub-skill",
+      toolId: "codex",
+      resolutions: [{ path: "SKILL.md", resolution: "hub" }]
+    });
+
+    expect(result).toMatchObject({
+      appliedCount: 0,
+      skippedCount: 1,
+      refreshedCopyCount: 0,
+      failures: []
+    });
+    await expect(fs.readFile(path.join(skillPath, "SKILL.md"), "utf8")).resolves.not.toContain(
+      "unmanaged codex edit"
+    );
+    await expect(fs.readFile(path.join(unmanagedPath, "SKILL.md"), "utf8")).resolves.toBe(
+      await fs.readFile(path.join(skillPath, "SKILL.md"), "utf8")
+    );
+    await expect(
+      checkToolState(skillPath, "keep-unmanaged-hub-skill", config.tools.codex)
+    ).resolves.toMatchObject({
+      syncState: "unmanaged",
+      dirtyFileCount: 0,
+      canMergeBack: false
+    });
+  });
+
+  it("applies selected unmanaged directory changes back to the hub", async () => {
+    const root = await makeTempRoot();
+    const hubDir = path.join(root, "hub");
+    const skillPath = path.join(hubDir, "claude-skill");
+    await writeSkill(skillPath, "claude-skill");
+    const config = makeConfig(root, hubDir, "copy");
+    const unmanagedPath = path.join(config.tools["claude-code"].skillsPath, "claude-skill");
+    await writeSkill(unmanagedPath, "claude-skill");
+    await fs.appendFile(path.join(unmanagedPath, "SKILL.md"), "\nclaude edit\n", "utf8");
+
+    const result = await applyMerge(config, await listSkills(config), {
+      skillId: "claude-skill",
+      toolId: "claude-code",
+      resolutions: [{ path: "SKILL.md", resolution: "copy" }]
+    });
+
+    expect(result).toMatchObject({
+      appliedCount: 1,
+      skippedCount: 0,
+      refreshedCopyCount: 0,
+      failures: []
+    });
+    await expect(fs.readFile(path.join(skillPath, "SKILL.md"), "utf8")).resolves.toContain("claude edit");
+    await expect(fs.readFile(path.join(unmanagedPath, "SKILL.md"), "utf8")).resolves.toContain("claude edit");
   });
 });
 
